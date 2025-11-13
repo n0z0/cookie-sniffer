@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/tls"
 	"fmt"
 	"log"
 	"net/http"
@@ -22,18 +21,27 @@ const (
 )
 
 var (
-	// Patterns untuk session cookies
+	// Patterns untuk session cookies - termasuk PHPSESSID
 	sessionPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)(phpsessid|jsessionid|asp\.net_sessionid)`),
 		regexp.MustCompile(`(?i)(session|sess|sid|auth|token|csrf|xsrf|jwt)`),
-		regexp.MustCompile(`(?i)(cookie|login|remember|auth_token)`),
-		regexp.MustCompile(`(?i)(bearer|refresh|access_token)`),
+		regexp.MustCompile(`(?i)(cookie|login|remember|auth_token|bearer)`),
+		regexp.MustCompile(`(?i)(refresh|access_token|oauth|apikey)`),
 	}
 )
 
 func isSessionCookie(name string) bool {
 	lowerName := strings.ToLower(name)
+
+	// Special check for PHPSESSID (common PHP session cookie)
+	if strings.Contains(strings.ToLower(name), "phpsessid") {
+		log.Printf("[DEBUG] PHPSESSID detected: %s", name)
+		return true
+	}
+
 	for _, pattern := range sessionPatterns {
 		if pattern.MatchString(lowerName) {
+			log.Printf("[DEBUG] Cookie '%s' matched pattern: %s", name, pattern.String())
 			return true
 		}
 	}
@@ -46,12 +54,12 @@ func logCookie(method, url, domain, name, value string, secure bool) {
 	if secure {
 		secureFlag = "true"
 	}
-	
+
 	logEntry := fmt.Sprintf("[%s] %s %s | Domain: %s | %s=%s | Secure: %s",
 		timestamp, method, url, domain, name, value, secureFlag)
-	
+
 	log.Println(logEntry)
-	
+
 	// Also log to file
 	f, err := os.OpenFile(COOKIE_LOG, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -59,7 +67,7 @@ func logCookie(method, url, domain, name, value string, secure bool) {
 		return
 	}
 	defer f.Close()
-	
+
 	_, err = f.WriteString(logEntry + "\n")
 	if err != nil {
 		log.Printf("Error writing to log file: %v", err)
@@ -76,106 +84,81 @@ func setupMITMCertificate() {
 func main() {
 	// Setup MITM certificate
 	setupMITMCertificate()
-	
+
 	// Get port from environment or use default
 	port := os.Getenv("PROXY_PORT")
 	if port == "" {
 		port = DEFAULT_PORT
 	}
-	
+
 	// Parse port as integer to validate
 	if _, err := strconv.Atoi(port); err != nil {
 		log.Fatalf("Invalid port number: %v", err)
 	}
-	
+
 	// Create proxy
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Verbose = true // Enable verbose logging
-	
-	// Setup TLS certificate generation
-	// goproxy will auto-generate certificates for each domain
-	// MITM certificates will be created on-demand
-	
-	// Intercept requests and sniff cookies
+
+	// CRITICAL: Configure MITM for HTTPS CONNECT requests
+	// This is the key fix - use HandleConnect with AlwaysMitm
+	proxy.OnRequest().HandleConnect(goproxy.AlwaysMitm)
+
+	// Basic request logging to verify handlers are working
 	proxy.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
-		// Log request
-		log.Printf("Request: %s %s", req.Method, req.URL.String())
-		
-		// Sniff cookies in request
-		for _, cookie := range req.Cookies() {
-			if isSessionCookie(cookie.Name) {
-				logCookie(req.Method, req.URL.String(), req.URL.Host, cookie.Name, cookie.Value, cookie.Secure)
+		log.Printf("[DEBUG] Handler working! Request: %s %s", req.Method, req.URL.String())
+
+		// Basic cookie checking
+		if len(req.Cookies()) > 0 {
+			log.Printf("[DEBUG] Found %d cookies in request", len(req.Cookies()))
+			for _, cookie := range req.Cookies() {
+				log.Printf("[DEBUG] Cookie: %s = %s", cookie.Name, cookie.Value)
+				if isSessionCookie(cookie.Name) {
+					log.Printf("[SUCCESS] Session cookie matched: %s", cookie.Name)
+					logCookie(req.Method, req.URL.String(), req.URL.Host, cookie.Name, cookie.Value, cookie.Secure)
+				}
 			}
 		}
-		
+
 		return req, nil
 	})
-	
-	// Intercept responses and sniff cookies
+
+	// Basic response logging
 	proxy.OnResponse().DoFunc(func(res *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
-		// Log response
-		if res != nil {
-			log.Printf("Response: %s", res.Status)
-			
-			// Sniff cookies in Set-Cookie headers
+		log.Printf("[DEBUG] Handler working! Response: %s", res.Status)
+
+		// Check for cookies in response
+		if res != nil && len(res.Cookies()) > 0 {
+			log.Printf("[DEBUG] Found %d cookies in response", len(res.Cookies()))
 			for _, cookie := range res.Cookies() {
+				log.Printf("[DEBUG] Response cookie: %s = %s", cookie.Name, cookie.Value)
 				if isSessionCookie(cookie.Name) {
+					log.Printf("[SUCCESS] Response session cookie matched: %s", cookie.Name)
 					logCookie("SET-COOKIE", ctx.Req.URL.String(), ctx.Req.URL.Host, cookie.Name, cookie.Value, cookie.Secure)
 				}
 			}
-			
-			// Also check for Set-Cookie headers directly
-			setCookieHeaders := res.Header.Values("Set-Cookie")
-			for _, setCookie := range setCookieHeaders {
-				parts := strings.Split(setCookie, ";")
-				if len(parts) > 0 {
-					cookiePart := parts[0]
-					equalsIndex := strings.Index(cookiePart, "=")
-					if equalsIndex > 0 {
-						cookieName := strings.TrimSpace(cookiePart[:equalsIndex])
-						cookieValue := strings.TrimSpace(cookiePart[equalsIndex+1:])
-						
-						if isSessionCookie(cookieName) {
-							// Check if secure
-							secure := false
-							for _, part := range parts[1:] {
-								if strings.TrimSpace(strings.ToLower(part)) == "secure" {
-									secure = true
-									break
-								}
-							}
-							logCookie("SET-COOKIE", ctx.Req.URL.String(), ctx.Req.URL.Host, cookieName, cookieValue, secure)
-						}
-					}
-				}
-			}
 		}
-		
+
 		return res
 	})
-	
-	// HTTPS CONNECT is handled automatically by goproxy
-	// The proxy will automatically handle MITM for HTTPS connections
-	
-	// Setup TLS config for the proxy
-	tlsConfig := &tls.Config{
-		InsecureSkipVerify: true, // Allow self-signed certificates for MITM
-	}
-	
-	// Start the proxy server
+
+	// Start the proxy server - use simple HTTP server since goproxy handles TLS internally
 	log.Printf("🚀 Session Cookie Sniffer Proxy starting on port %s", port)
 	log.Printf("📝 Cookies will be logged to: %s", COOKIE_LOG)
 	log.Printf("⚠️  Browser will show certificate warnings - this is normal!")
 	log.Printf("📍 Configure your browser to use this proxy: localhost:%s", port)
-	log.Printf("\nPress Ctrl+C to stop the proxy\n")
-	
-	server := &http.Server{
-		Addr:      ":" + port,
-		Handler:   proxy,
-		TLSConfig: tlsConfig,
-	}
-	
-	err := server.ListenAndServe()
+	log.Printf("✅ HTTPS MITM is now enabled")
+	log.Printf("")
+	log.Printf("🔧 DEBUGGING INFO:")
+	log.Printf("   - Check console output for [DEBUG] messages")
+	log.Printf("   - Look for [SUCCESS] messages when cookies are captured")
+	log.Printf("   - Monitor [INFO] messages for unmatched cookies")
+	log.Printf("   - Special support for PHPSESSID, JSESSIONID, ASP.NET_SessionId")
+	log.Printf("")
+	log.Printf("Press Ctrl+C to stop the proxy\n")
+
+	// Start server - goproxy handles all the TLS/MITM complexity
+	err := http.ListenAndServe(":"+port, proxy)
 	if err != nil {
 		log.Fatalf("Failed to start proxy server: %v", err)
 	}

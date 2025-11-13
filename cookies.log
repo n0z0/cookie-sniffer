@@ -1,0 +1,1 @@
+[2025-11-13 23:51:23] SET-COOKIE https://httpbin.org:443/cookies/set/PHPSESSID/test123value | Domain: httpbin.org:443 | PHPSESSID=test123value | Secure: false

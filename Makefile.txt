@@ -1,0 +1,42 @@
+# Makefile for Cookie Sniffer Proxy
+
+.PHONY: build run clean deps
+
+# Build the proxy
+build:
+	go build -o cookie-sniffer main.go
+
+# Run the proxy
+run:
+	./cookie-sniffer
+
+# Install dependencies
+deps:
+	go mod tidy
+
+# Build and run in one command
+start: deps build run
+
+# Clean build artifacts
+clean:
+	rm -f cookie-sniffer
+	rm -f *.log
+
+# Run with custom port
+dev:
+	PROXY_PORT=3000 ./cookie-sniffer
+
+# Show help
+help:
+	@echo "Cookie Sniffer Proxy - Makefile Commands:"
+	@echo ""
+	@echo "make deps     - Install Go dependencies"
+	@echo "make build    - Build the proxy executable"
+	@echo "make run      - Run the proxy"
+	@echo "make start    - Build and run the proxy"
+	@echo "make dev      - Run proxy on port 3000"
+	@echo "make clean    - Remove build artifacts and logs"
+	@echo "make help     - Show this help message"
+	@echo ""
+	@echo "Environment Variables:"
+	@echo "PROXY_PORT    - Port to run proxy (default: 8080)"

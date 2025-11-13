@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"fmt"
 	"log"
 	"net/http"
@@ -75,8 +76,9 @@ func logCookie(method, url, domain, name, value string, secure bool) {
 	}
 }
 
-func setupMITMCertificate() {
-	log.Println("🔧 Setting up MITM with custom Root CA...")
+// SAFER FIX: Load Root CA dengan robust error handling dan null checks
+func setupCustomRootCA() {
+	log.Println("🔧 Setting up custom Root CA...")
 
 	// Check if root CA files exist
 	if _, err := os.Stat(ROOT_CA_CERT); os.IsNotExist(err) {
@@ -86,8 +88,44 @@ func setupMITMCertificate() {
 		log.Fatalf("❌ Root CA private key not found: %s", ROOT_CA_KEY)
 	}
 
+	// Load Root CA certificate dan key
+	rootCAcert, err := os.ReadFile(ROOT_CA_CERT)
+	if err != nil {
+		log.Fatalf("❌ Failed to read Root CA certificate: %v", err)
+	}
+
+	rootCAkey, err := os.ReadFile(ROOT_CA_KEY)
+	if err != nil {
+		log.Fatalf("❌ Failed to read Root CA private key: %v", err)
+	}
+
+	log.Printf("📜 Loaded Root CA certificate: %d bytes", len(rootCAcert))
+	log.Printf("🔑 Loaded Root CA private key: %d bytes", len(rootCAkey))
+
+	// CRITICAL: Set goproxy global variables
+	goproxy.CA_CERT = rootCAcert
+	goproxy.CA_KEY = rootCAkey
+
+	log.Printf("✅ Set goproxy.CA_CERT and goproxy.CA_KEY")
+
+	// CRITICAL FIX: Manually parse X509KeyPair untuk update GoproxyCa
+	// goproxy.GoproxyCa might not auto-update, so we explicitly parse it
+	goproxy.GoproxyCa, err = tls.X509KeyPair(goproxy.CA_CERT, goproxy.CA_KEY)
+	if err != nil {
+		log.Fatalf("❌ Failed to parse custom Root CA: %v", err)
+	}
+
+	log.Printf("✅ Custom Root CA parsed and assigned to goproxy.GoproxyCa")
+
+	// SAFER: Check if certificate is properly loaded without accessing .Leaf
+	if len(goproxy.GoproxyCa.Certificate) > 0 {
+		log.Printf("🔍 Certificate loaded successfully with %d certificate(s) in chain", len(goproxy.GoproxyCa.Certificate))
+	} else {
+		log.Printf("⚠️ Warning: Certificate chain is empty")
+	}
+
 	// Create certificate cache directory
-	err := os.MkdirAll(CERT_CACHE_DIR, 0755)
+	err = os.MkdirAll(CERT_CACHE_DIR, 0755)
 	if err != nil {
 		log.Fatalf("❌ Failed to create certificate cache directory: %v", err)
 	}
@@ -97,15 +135,20 @@ func setupMITMCertificate() {
 	if err == nil {
 		log.Printf("📁 Certificate cache directory: %s", CERT_CACHE_DIR)
 		log.Printf("📋 Existing certificates: %d", len(files))
+	} else {
+		log.Printf("📁 Certificate cache directory: %s (empty or access denied)", CERT_CACHE_DIR)
 	}
 
-	log.Println("✅ Root CA files found and verified")
-	log.Println("🔐 MITM certificates will be signed by Root CA and cached")
+	log.Println("✅ Custom Root CA setup completed successfully")
 }
 
 func main() {
-	// Setup MITM dengan custom Root CA
-	setupMITMCertificate()
+	// CRITICAL: Setup custom Root CA FIRST before creating proxy
+	setupCustomRootCA()
+
+	// Create proxy
+	proxy := goproxy.NewProxyHttpServer()
+	proxy.Verbose = true // Enable verbose logging
 
 	// Get port from environment or use default
 	port := os.Getenv("PROXY_PORT")
@@ -118,12 +161,7 @@ func main() {
 		log.Fatalf("Invalid port number: %v", err)
 	}
 
-	// Create proxy
-	proxy := goproxy.NewProxyHttpServer()
-	proxy.Verbose = true // Enable verbose logging
-
-	// CRITICAL: Configure MITM for HTTPS CONNECT requests
-	// This enables MITM mode and uses our custom Root CA
+	// Use built-in MITM dengan updated GoproxyCa
 	proxy.OnRequest().HandleConnect(goproxy.AlwaysMitm)
 
 	// Request handler for cookie capture
@@ -172,14 +210,16 @@ func main() {
 	log.Printf("📍 Configure your browser to use this proxy: localhost:%s", port)
 	log.Printf("✅ HTTPS MITM with custom Root CA is enabled")
 	log.Printf("")
-	log.Printf("🔧 DEBUGGING INFO:")
-	log.Printf("   - Check console output for [DEBUG] messages")
-	log.Printf("   - Look for [SUCCESS] messages when cookies are captured")
-	log.Printf("   - Monitor certificate cache directory for generated certs")
+	log.Printf("🔧 SAFER FIX APPLIED:")
+	log.Printf("   - Custom Root CA loaded via goproxy.CA_CERT dan goproxy.CA_KEY")
+	log.Printf("   - EXPLICITLY parsed X509KeyPair untuk update goproxy.GoproxyCa")
+	log.Printf("   - Using goproxy.AlwaysMitm")
+	log.Printf("   - Safe certificate validation without .Leaf access")
+	log.Printf("   - Robust error handling with null checks")
 	log.Printf("")
 	log.Printf("Press Ctrl+C to stop the proxy\n")
 
-	// Start server - goproxy handles all the TLS/MITM complexity
+	// Start server
 	err := http.ListenAndServe(":"+port, proxy)
 	if err != nil {
 		log.Fatalf("Failed to start proxy server: %v", err)

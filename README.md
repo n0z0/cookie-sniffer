@@ -2,6 +2,17 @@
 
 MITM (Man-in-the-Middle) proxy dalam bahasa Golang untuk sniffing session cookies seperti BurpSuite.
 
+## 🌟 Platform Support
+
+✅ **Fully Cross-Platform:**
+- **Linux** - Fully supported
+- **Windows** - Fully supported (see Windows guide)
+- **macOS** - Fully supported
+- **Docker** - Compatible
+
+📖 **Platform-Specific Guides:**
+- [Windows Guide](WINDOWS.md) - Detailed Windows setup & troubleshooting
+
 ## Fitur
 
 - **HTTPS Termination**: Proxy dapat mengintercept HTTPS traffic dengan auto-generated certificates
@@ -10,10 +21,23 @@ MITM (Man-in-the-Middle) proxy dalam bahasa Golang untuk sniffing session cookie
 - **Real-time Monitoring**: Monitoring real-time untuk request dan response
 - **Secure Flag Detection**: Mendeteksi cookies dengan Secure flag
 
+## 🚀 Quick Start by Platform
+
+### Linux/macOS
+```bash
+make deps && make build && make run
+```
+
+### Windows
+```cmd
+build-windows.bat
+run-windows.bat
+```
+
 ## Instalasi & Running
 
 ### Prerequisites
-- Go 1.21 atau lebih baru
+- Go 1.19 atau lebih baru
 
 ### 1. Install Dependencies
 ```bash
@@ -22,13 +46,18 @@ go mod tidy
 
 ### 2. Build dan Run
 ```bash
+# Linux/macOS
 go build -o cookie-sniffer
 ./cookie-sniffer
+
+# Windows  
+go build -o cookie-sniffer.exe
+cookie-sniffer.exe
 ```
 
 ### 3. Konfigurasi Browser
 Set proxy browser Anda ke:
-- Host: `localhost`
+- Host: `localhost` atau `127.0.0.1`
 - Port: `8080`
 
 ### 4. Handle Certificate Warning

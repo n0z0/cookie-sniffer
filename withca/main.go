@@ -1,0 +1,180 @@
+package main
+
+import (
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/elazarl/goproxy"
+)
+
+const (
+	DEFAULT_PORT   = "8080"
+	ROOT_CA_CERT   = "root-ca.crt"
+	ROOT_CA_KEY    = "root-ca.key"
+	COOKIE_LOG     = "cookies.log"
+	CERT_CACHE_DIR = "cert_cache"
+)
+
+var (
+	// Patterns untuk session cookies - termasuk PHPSESSID
+	sessionPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)(phpsessid|jsessionid|asp\.net_sessionid)`),
+		regexp.MustCompile(`(?i)(session|sess|sid|auth|token|csrf|xsrf|jwt)`),
+		regexp.MustCompile(`(?i)(cookie|login|remember|auth_token|bearer)`),
+		regexp.MustCompile(`(?i)(refresh|access_token|oauth|apikey)`),
+	}
+)
+
+func isSessionCookie(name string) bool {
+	lowerName := strings.ToLower(name)
+
+	// Special check for PHPSESSID (common PHP session cookie)
+	if strings.Contains(strings.ToLower(name), "phpsessid") {
+		log.Printf("[DEBUG] PHPSESSID detected: %s", name)
+		return true
+	}
+
+	for _, pattern := range sessionPatterns {
+		if pattern.MatchString(lowerName) {
+			log.Printf("[DEBUG] Cookie '%s' matched pattern: %s", name, pattern.String())
+			return true
+		}
+	}
+	return false
+}
+
+func logCookie(method, url, domain, name, value string, secure bool) {
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	secureFlag := "false"
+	if secure {
+		secureFlag = "true"
+	}
+
+	logEntry := fmt.Sprintf("[%s] %s %s | Domain: %s | %s=%s | Secure: %s",
+		timestamp, method, url, domain, name, value, secureFlag)
+
+	log.Println(logEntry)
+
+	// Also log to file
+	f, err := os.OpenFile(COOKIE_LOG, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("Error opening log file: %v", err)
+		return
+	}
+	defer f.Close()
+
+	_, err = f.WriteString(logEntry + "\n")
+	if err != nil {
+		log.Printf("Error writing to log file: %v", err)
+	}
+}
+
+func setupMITMCertificate() {
+	// goproxy akan auto-generate certificate menggunakan Root CA jika file ada
+	// Files yang diperlukan: root-ca.crt dan root-ca.key
+	log.Println("🔧 Setting up MITM with custom Root CA...")
+
+	// Check if root CA files exist
+	if _, err := os.Stat(ROOT_CA_CERT); os.IsNotExist(err) {
+		log.Fatalf("❌ Root CA certificate not found: %s", ROOT_CA_CERT)
+	}
+	if _, err := os.Stat(ROOT_CA_KEY); os.IsNotExist(err) {
+		log.Fatalf("❌ Root CA private key not found: %s", ROOT_CA_KEY)
+	}
+
+	// Create certificate cache directory
+	os.MkdirAll(CERT_CACHE_DIR, 0755)
+
+	log.Println("✅ Root CA files found and verified")
+	log.Printf("📁 Certificate cache directory: %s", CERT_CACHE_DIR)
+	log.Println("🔐 MITM certificates will be signed by Root CA")
+}
+
+func main() {
+	// Setup MITM dengan custom Root CA
+	setupMITMCertificate()
+
+	// Get port from environment or use default
+	port := os.Getenv("PROXY_PORT")
+	if port == "" {
+		port = DEFAULT_PORT
+	}
+
+	// Parse port as integer to validate
+	if _, err := strconv.Atoi(port); err != nil {
+		log.Fatalf("Invalid port number: %v", err)
+	}
+
+	// Create proxy
+	proxy := goproxy.NewProxyHttpServer()
+	proxy.Verbose = true // Enable verbose logging
+
+	// CRITICAL: Configure MITM for HTTPS CONNECT requests
+	// goproxy akan otomatis gunakan Root CA jika file root-ca.crt dan root-ca.key ada
+	proxy.OnRequest().HandleConnect(goproxy.AlwaysMitm)
+
+	// Request handler for cookie capture
+	proxy.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+		log.Printf("[DEBUG] Request: %s %s", req.Method, req.URL.String())
+
+		// Capture cookies from request
+		if len(req.Cookies()) > 0 {
+			log.Printf("[DEBUG] Found %d cookies in request", len(req.Cookies()))
+			for _, cookie := range req.Cookies() {
+				log.Printf("[DEBUG] Cookie: %s = %s", cookie.Name, cookie.Value)
+				if isSessionCookie(cookie.Name) {
+					log.Printf("[SUCCESS] Session cookie matched: %s", cookie.Name)
+					logCookie(req.Method, req.URL.String(), req.URL.Host, cookie.Name, cookie.Value, cookie.Secure)
+				}
+			}
+		}
+
+		return req, nil
+	})
+
+	// Response handler for cookie capture
+	proxy.OnResponse().DoFunc(func(res *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
+		log.Printf("[DEBUG] Response: %s", res.Status)
+
+		// Capture cookies from response (Set-Cookie headers)
+		if res != nil && len(res.Cookies()) > 0 {
+			log.Printf("[DEBUG] Found %d cookies in response", len(res.Cookies()))
+			for _, cookie := range res.Cookies() {
+				log.Printf("[DEBUG] Response cookie: %s = %s", cookie.Name, cookie.Value)
+				if isSessionCookie(cookie.Name) {
+					log.Printf("[SUCCESS] Response session cookie matched: %s", cookie.Name)
+					logCookie("SET-COOKIE", ctx.Req.URL.String(), ctx.Req.URL.Host, cookie.Name, cookie.Value, cookie.Secure)
+				}
+			}
+		}
+
+		return res
+	})
+
+	// Start the proxy server
+	log.Printf("🚀 Session Cookie Sniffer Proxy starting on port %s", port)
+	log.Printf("📝 Cookies will be logged to: %s", COOKIE_LOG)
+	log.Printf("🔐 Using custom Root CA: %s", ROOT_CA_CERT)
+	log.Printf("📍 Configure your browser to use this proxy: localhost:%s", port)
+	log.Printf("✅ HTTPS MITM with custom Root CA is enabled")
+	log.Printf("")
+	log.Printf("🔧 DEBUGGING INFO:")
+	log.Printf("   - Check console output for [DEBUG] messages")
+	log.Printf("   - Look for [SUCCESS] messages when cookies are captured")
+	log.Printf("   - Special support for PHPSESSID, JSESSIONID, ASP.NET_SessionId")
+	log.Printf("   - All certificates signed by Root CA will be trusted")
+	log.Printf("")
+	log.Printf("Press Ctrl+C to stop the proxy\n")
+
+	// Start server - goproxy handles all the TLS/MITM complexity
+	err := http.ListenAndServe(":"+port, proxy)
+	if err != nil {
+		log.Fatalf("Failed to start proxy server: %v", err)
+	}
+}

@@ -3,7 +3,7 @@
 MITM (Man-in-the-Middle) proxy dalam bahasa Golang untuk sniffing session cookies seperti BurpSuite. Testing URL:
 
 ```txt
-https://httpbin.org/cookies/set/PHPSESSID/test123value
+curl -k -v --proxy http://127.0.0.1:8080 https://httpbin.org/cookies/set/PHPSESSID/test123value
 ```
 
 ## 🌟 Platform Support

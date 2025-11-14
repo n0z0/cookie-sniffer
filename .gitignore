@@ -16,6 +16,7 @@ cookie-sniffer
 coverage.*
 *.coverprofile
 profile.cov
+cookies.log
 *.log
 *.key
 *.crt

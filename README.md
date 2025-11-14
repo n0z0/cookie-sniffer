@@ -183,3 +183,11 @@ tail -f cookies.log
 ## License
 
 Educational/Training purposes only. Use responsibly!
+
+## RELEASE
+
+```sh
+git tag v0.0.1
+git push origin --tags
+go list -m github.com/n0z0/cookie-sniffer@v0.0.1
+```

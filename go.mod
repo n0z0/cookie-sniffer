@@ -1,10 +1,10 @@
-module cookie-sniffer-proxy
+module github.com/n0z0/cookie-sniffer
 
-go 1.19
+go 1.25.3
 
-require github.com/elazarl/goproxy v1.2.4
+require github.com/elazarl/goproxy v1.7.2
 
 require (
-	golang.org/x/net v0.33.0 // indirect
-	golang.org/x/text v0.21.0 // indirect
+	golang.org/x/net v0.35.0 // indirect
+	golang.org/x/text v0.22.0 // indirect
 )

@@ -1,6 +1,10 @@
 # Session Cookie Sniffer Proxy
 
-MITM (Man-in-the-Middle) proxy dalam bahasa Golang untuk sniffing session cookies seperti BurpSuite.
+MITM (Man-in-the-Middle) proxy dalam bahasa Golang untuk sniffing session cookies seperti BurpSuite. Testing URL:
+
+```txt
+https://httpbin.org/cookies/set/PHPSESSID/test123value
+```
 
 ## 🌟 Platform Support
 
